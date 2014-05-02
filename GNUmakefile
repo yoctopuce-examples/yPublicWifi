@@ -5,12 +5,8 @@
 # ********************************************************************
 
 #YOCTOPUCE SPECIFIC DEFINITIONS
-#YOCTO_API_INCLUDE = yoctopuce_api/include/
-#YOCTO_API_LIB = yoctopuce_api/lib/
-
-YOCTO_API_INCLUDE = ../yoctoprod/yoctolib/v1.0/Public/cpp/Sources/
-YOCTO_API_LIB = ../yoctoprod/yoctolib/v1.0/Public/cpp/Binaries/linux/mips
-
+YOCTO_API_INCLUDE = yoctopuce_api/include/
+YOCTO_API_LIB = yoctopuce_api/lib/
 
 YOCTO_COMPILE_OPTIONS = -DCPU_BIG_ENDIAN -I$(YOCTO_API_INCLUDE)
 YOCTO_LINK_OPTIONS = -L$(YOCTO_API_LIB) -lyocto-static
