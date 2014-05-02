@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h> 
 #include <string.h>
-
+#include <unistd.h>
 #include "yocto_api.h"
 #include "yocto_display.h"
 #include "yocto_anbutton.h"
@@ -10,33 +10,29 @@
 using namespace std;
 
 #define WELCOME_MSG "Press for WiFi"
-#define PASSWORD_EXPIRATION (30)
+#define PASSWORD_EXPIRATION (3600) //password expire after 1 hour
+#define PASSWORD_LENGHT (10) 
 #define WIFI_CONFIG_FILE "/etc/config/wireless"
 #define WIFI_CONFIG_TMP_FILE "/tmp/wireless.tmp"
 #define WIFI_CONFIG_OLD_FILE "/etc/config/wireless.old"
 
+static const char allowedchar[] =
+"23456789."
+"ABCDEFGHIJKMNPQRSTUVWXYZ"
+"abcdefghjkmnpqrstuvwxyz";
+
 YDisplay    *Display = NULL;
 YAnButton   *Button = NULL;
 int         IsWifiUp=0;
-time_t      PasswordExpriration=0;
-string      currentPasswd="";
-
-
-static void log (const string& line)
-{
-    cout << line;
-}
-
-
-
+time_t      PasswordExpiration=0;
 
 static void showMessage(const char *msg)
 {
 
-    cout << "display :"<<msg << endl;
+    cout << msg << endl;
 
-    if (!Display->isOnline()) {
-        cerr << "Module is offline (check USB cable)" << endl;
+    if (Display==NULL || !Display->isOnline()) {
+        cerr << "No Yocto-Display connected (check USB cable)" << endl;
         return;
     }
 
@@ -54,9 +50,7 @@ static void showMessage(const char *msg)
     l0->drawText(w / 2, h / 2, YDisplayLayer::ALIGN_CENTER, msg);
 }
 
-
-
-static int startWifi(const char *password)
+static int startWiFi(const char *password)
 {
     FILE *in, *out;
     char buffer[256];
@@ -76,7 +70,6 @@ static int startWifi(const char *password)
     while (fgets(buffer, 256, in) != NULL) {
         char *option = strstr(buffer, "option key");
         if (option){
-            //todo: check for buffer overflow
             sprintf(option,"option key '%s'\n",password);            
         }
         if(fputs(buffer,out) == EOF){
@@ -100,25 +93,25 @@ static int startWifi(const char *password)
     return 0;
 }
 
-
-
-static const char alphanum[] =
-"0123456789"
-"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-"abcdefghijklmnopqrstuvwxyz";
-
+static void stopWiFi(void)
+{
+    if(IsWifiUp) {
+        system("wifi down");
+        showMessage(WELCOME_MSG);
+        IsWifiUp=0;
+    }
+}
 
 static void generatePasswd(char * buffer,int len)
 {
     int i;
-    int modulo = sizeof(alphanum) - 1;
+    int modulo = sizeof(allowedchar) - 1;
     for (i=0; i< len-1 ; i++) {
         int idx = rand() % modulo;
-        *buffer++ = alphanum[idx];
+        *buffer++ = allowedchar[idx];
     }
     *buffer=0;
 }
-
 
 static void anButtonValueChangeCallBack(YAnButton *bt, const string& value)
 {
@@ -126,22 +119,18 @@ static void anButtonValueChangeCallBack(YAnButton *bt, const string& value)
         return;
     }
 
-    time_t now = time(NULL);
-    if(now > PasswordExpriration) {
+    if (!IsWifiUp) {
         showMessage("starting WiFi...");
-        cout << "generate new Password"<< endl;
-        char newpass[9];
-        generatePasswd(newpass,9);
-        cout << "new password is "<<newpass << endl;
-        if (startWifi(newpass) < 0) {
+        char newpass[PASSWORD_LENGHT+1];
+        generatePasswd(newpass,PASSWORD_LENGHT + 1);
+        if (startWiFi(newpass) < 0) {
             showMessage("unable to start WiFi");
             return;
         }
         showMessage(newpass);
-        cout << "wifi is ok"<<newpass << endl;
     }
 
-    PasswordExpriration = now + PASSWORD_EXPIRATION;
+    PasswordExpiration = time(NULL) + PASSWORD_EXPIRATION;
 }
 
 
@@ -163,35 +152,38 @@ static void deviceRemoval(YModule *m)
 {
     string serial = m->get_serialNumber();
     cout << "Device removal : " << serial << endl;
-
     if( serial == Display->module()->get_serialNumber()) {
-        if (IsWifiUp) {
-            system("wifi down");
-        }
+        stopWiFi();
         Display = NULL;
         Button = NULL;        
     }
 }
 
 
+static void usage()
+{
+    cout << "usage: yPublicWiFi <-d> " << endl;
+    cout << "       -d : start yPublicWiFi in background" << endl;
+    exit(1);
+}
 
 
 int main(int argc, const char * argv[])
 {
     string      errmsg;
 
-    // stop Wifi
-    system("wifi down");
-
-
-    YAPI::RegisterLogFunction(log);
-    // Setup the API to use local USB devices
-    if(YAPI::RegisterHub("usb", errmsg) != YAPI_SUCCESS) {
-        cerr << "RegisterHub error: " << errmsg << endl;
-        return 1;
+    if (argc > 1){
+        if (argv[1][0]=='-' && argv[1][1]=='d') {
+            // start yPublicWiFi in Background
+            if (daemon(0, 0) < 0) {
+                exit(1);
+            }
+        } else {
+            usage();
+        }
     }
 
-
+    stopWiFi();
     YAPI::RegisterDeviceArrivalCallback(deviceArrival);
     YAPI::RegisterDeviceRemovalCallback(deviceRemoval);
     YAPI::DisableExceptions();
@@ -201,19 +193,11 @@ int main(int argc, const char * argv[])
         return 1;
     }
 
-    cout << "Hit Ctrl-C to Stop " << endl;
-
     while (true) {
         YAPI::UpdateDeviceList(errmsg); // traps plug/unplug events
         YAPI::Sleep(1000, errmsg);   // traps others events
-        if (IsWifiUp){
-            time_t t;
-            t = time(NULL);
-            if (t > PasswordExpriration ) {
-                system("wifi down");
-                IsWifiUp=0;
-                showMessage(WELCOME_MSG);
-            }
+        if (time(NULL) > PasswordExpiration ) {
+            stopWiFi();
         }
     } 
     return 0;
